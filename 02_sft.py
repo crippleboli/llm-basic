@@ -2,12 +2,15 @@
 SFT Demo 脚本
 """
 from transformers import AutoTokenizer
-
-tokenizer = AutoTokenizer.from_pretrained("model/Qwen3-0.6B-Base/")
-
 from datasets import load_dataset
 from typing import Dict
+from transformers import PreTrainedTokenizerFast
+import torch
+from typing import List
+import numpy as np
 
+
+tokenizer = AutoTokenizer.from_pretrained("model/Qwen3-0.6B-Base/")
 
 def get_train_data(sft_config):
     """
@@ -29,9 +32,7 @@ def get_train_data(sft_config):
     return result_list
 
 
-from transformers import PreTrainedTokenizerFast
-import torch
-from typing import List
+
 
 
 def create_answer_mask(input_ids, tokenizer: PreTrainedTokenizerFast):
@@ -170,7 +171,6 @@ def compute_loss(output_logits, labels, assistant_answer_mask):
     return average_loss
 
 
-import numpy as np
 
 
 def cosine_scheduler_with_warmup(total_batch, warmup_ratio, lr, current_batch):
