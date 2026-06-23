@@ -1,0 +1,87 @@
+
+
+0.导包:   unsloth 放在最前面
+1.模型加载: 当传入model_name，并且不传use_exact_model_name和local_files_only参数时，Unsloth，会将传入的model_name改写，直接从它的huggingface拉取unsloth已经量化好的
+2.模型量化: peft库 和 unsloth库 差异点：target_modules不能传入all-linear，如果需要对所有的线性层插入LoRA模块，需要传入["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+3.数据处理:
+    单条数据格式:
+    {
+        "conversation_id": 1,
+        "category": "dialogue",
+        "conversation": [
+            {
+                "human": "不想回家 宁愿呆在吵闹的学校宿舍也不愿意回家 家庭经济变故三年了还处在悬崖边的境地 一回家面对的就是一张张哭丧幽怨的脸 每时每刻在耳边的只有钱字 富人爱命穷人爱钱? 我感受不到自己存在的价值和意义 我想逃离这个社会可是还是这个家让我逃不掉 我才16岁可是我感觉我活过的每一秒比800年还漫长 是不是只有在根本上也就是等经济状况变好了我才能变得正常。。。我该怎么办。。",
+                "assistant": "你现在遇到的困难是很现实的，但是也不要放弃希望。你可以和家人沟通，了解他们的想法和感受，同时也让他们了解你的想法和需求。也可以找到一些适合自己的方式来放松自己的心情，比如去看电影、读书、运动等等。同时，也可以尝试去寻求帮助和支持，比如和老师、朋友、心理咨询师等等沟通，这样有助于缓解你的情绪和压力。记得不要放弃对未来的希望和信心，每个人都有自己的节奏和发展方式，相信自己会慢慢找到自己的出路。"
+            }
+        ],
+        "dataset": "psychology"
+    }
+
+    数据处理函数:
+    def data_convert(examples: Dict[str, List]):
+        conversation_example_list = examples["conversation"]
+        message_text_list = []
+        for example in conversation_example_list:
+            message_list = []
+            conversation = example[0]
+            message_list.append({"role": "user", "content": conversation["human"]})
+            message_list.append({"role": "assistant", "content": conversation["assistant"]})
+
+            message_text = tokenizer.apply_chat_template(message_list, tokenize=False, add_generation_prompt=False)
+            message_text_list.append(message_text)
+
+        return {"text": message_text_list}
+
+    conversation_example_list = [
+        # 第 1 条数据的 conversation 字段
+        [
+            {
+                "human": "不想回家 宁愿呆在吵闹的学校宿舍...",
+                "assistant": "你现在遇到的困难是很现实的..."
+            }
+        ],
+        # 第 2 条数据的 conversation 字段
+        [
+            {
+                "human": "今天心情很低落，考试考砸了。",
+                "assistant": "一次考试代表不了什么，别太难过..."
+            }
+        ],
+        # ... 直到第 1000 条
+    ]
+    data_convert 函数理解:
+        后续开启了 默认数量(1000)的批处理, 所以在函数内部的 conversation_example_list 相当于将1000条单条数据中的 "conversation"关键字提取并组成列表
+        循环取出 conversation_example_list每一条 因为外层有嵌套列表 先进行 conversation = example[0]取出 用户和ai组成的字典
+        然后分别取出 包装成 {"role": "角色", "content": conversation[各自键]}
+        每一对用户和ai组成列表交给分词器处理 (这里的方式是受原始数据影响 分词器最小处理的单元是 {'role':'角色','content':'内容'}
+        后续return的 {"text": message_text_list}会不断被map函数累积:
+        {"text": 1-1000} {"text": 1000-2000} {"text": 2000-n} 累积成 {"text": 1-n}
+
+    mapped_psychology_data = {
+        # ─── 训练集（占 90% 数据） ───
+        "train": {
+            "text": [
+                "<|im_start|>user\n不想回家...<|im_end|>\n<|im_start|>assistant\n...",
+                "<|im_start|>user\n16岁社恐...<|im_end|>\n<|im_start|>assistant\n...",
+                # ... 这里躺着 90% 的格式化文本 ...
+            ]
+        },
+
+        # ─── 验证集（占 10% 数据） ───
+        "test": {
+            "text": [
+                "<|im_start|>user\n为什么情绪波动大...<|im_end|>\n<|im_start|>assistant\n...",
+                # ... 这里躺着 10% 留着用来考试的格式化文本 ...
+            ]
+        }
+    }
+
+    问：为什么代码里分出了 train 和 test，但在写处理函数和调用 map 时，完全没有写代码去分它们，两边的数据就都被处理了？
+
+    答：因为 Hugging Face 框架在外面自动帮你做了“分流”。
+
+    框架自动开箱：当它看到有 train 和 test 时，会在后台自动变成一个循环，先去拉 train 这一堆，再去拉 test 这一堆。
+
+    函数只管干活：函数（data_convert）根本不需要知道自己当前处理的是谁。框架把哪一堆的数据打包好（每1000条）送进来，函数就闷头加工转换，然后吐出结果。
+
+    框架自动回填：等函数加工完，框架会自动在外面把处理好的新数据，整整齐齐地重新放回对应的 train 和 test 盒子里。
